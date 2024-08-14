@@ -1,0 +1,53 @@
+name: 'git2kandji'
+description: >
+  Create, Update, and Delete scripts and profiles in Kandji from your Github repository
+author: "moojomoore"
+inputs:
+  KANDJI_SUBDOMAIN:
+    description: 'subdomain of your kandji instance'
+    required: true
+  KANDJI_REGION:
+    description: 'region of your kandji instance'
+    required: true
+  KANDJI_TOKEN:
+    description: 'api token of your kandji instance'
+    required: true
+  SCRIPT_DIR:
+    description: 'directory containing script files (e.g. custom-scripts)'
+    required: false
+    default: 'scripts'
+  SCRIPT_EXT:
+    description: 'space-separated list of file extensions to process (e.g. .sh .py .zsh)'
+    required: false
+    default: 'sh'
+  PROFILE_DIR:
+    description: 'directory containing profile files (e.g. custom-profiles)'
+    required: false
+    default: 'profiles'
+  DELETE:
+    description: 'delete kandji library items not present in local repository'
+    required: false
+    default: 'false'
+  ONLY_SCRIPTS:
+    description: 'only run the kandji script portion'
+    required: false
+    default: 'false'
+  ONLY_PROFILES:
+    description: 'only run the kandji profiles portion'
+    required: false
+    default: 'false'
+  DRY_RUN:
+    description: 'compare kandji to local repository and outputs any changes to be made'
+    required: false
+    default: 'false'
+  LOG_LEVEL:
+    description: 'set the logging level'
+    required: false
+    default: 'INFO'
+
+runs:
+  using: 'docker'
+  image: 'Dockerfile'
+branding:
+  color: blue
+  icon: refresh-cw
