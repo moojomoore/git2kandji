@@ -361,12 +361,8 @@ def parse_script_metadata(audit_script_path, audit_script_content):
     return metadata
 
 # Create Custom Script
-def create_custom_script(audit_script_path, remediation_script_path=None, script_name=None):
+def create_custom_script(audit_script_path, remediation_script_path=None):
     """Create Kandji Custom Script"""
-
-    # If script_name is not provided, set it from audit_script_path
-    if not script_name:
-        script_name = os.path.basename(audit_script_path)
 
     # Read Audit Script Content
     audit_script_content = ""
@@ -408,12 +404,8 @@ def create_custom_script(audit_script_path, remediation_script_path=None, script
     return response
 
 # Update Custom Script
-def update_custom_script(library_item_id, audit_script_path, remediation_script_path=None, script_name=None):
+def update_custom_script(library_item_id, audit_script_path, remediation_script_path=None):
     """Update Kandji Custom Script"""
-
-    # If script_name is not provided, set it from audit_script_path
-    if not script_name:
-        script_name = os.path.basename(audit_script_path)
 
     # Read Audit Script Content
     audit_script_content = ""
@@ -642,7 +634,7 @@ def sync_kandji_scripts(local_scripts, kandji_scripts, dryrun=False):
                     logger.info(f"[DRY RUN] Would update Kandji Custom Script Library Item: {configured_name}")
                 else:
                     logger.info(f"Updating Kandji Custom Script Library Item: {configured_name}")
-                    update_custom_script(kandji_script["id"], audit_script, remediation_script, script_name)
+                    update_custom_script(kandji_script["id"], audit_script, remediation_script)
             else:
                 logger.info(f"No changes detected for Kandji Custom Script Library Item: {configured_name}")
         else:
@@ -650,7 +642,7 @@ def sync_kandji_scripts(local_scripts, kandji_scripts, dryrun=False):
                 logger.info(f"[DRY RUN] Would create Kandji Custom Script Library Item: {configured_name}")
             else:
                 logger.info(f"Creating Kandji Custom Script Library Item: {configured_name}")
-                create_custom_script(audit_script, remediation_script, script_name)
+                create_custom_script(audit_script, remediation_script)
 
 # Sync Kandji Profiles
 def sync_kandji_profiles(local_profiles, kandji_profiles, dryrun=False):
