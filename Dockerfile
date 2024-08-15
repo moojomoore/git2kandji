@@ -10,5 +10,4 @@ USER appuser
 
 RUN pip install --user -r requirements.txt
 
-ENTRYPOINT ["python3"]
-CMD ["/action/git2kandji.py"]
+ENTRYPOINT ["python3", "/action/git2kandji.py"]
