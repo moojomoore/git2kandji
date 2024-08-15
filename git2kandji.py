@@ -260,7 +260,6 @@ def normalize_xml_content(xml_content):
         logger.error(f"Failed to parse XML: {e}")
         return xml_content.strip()
 
-
 def compare_items(new, old, is_xml=False):
     """Compare two items. Normalize XML content if applicable."""
     if is_xml:
@@ -322,6 +321,45 @@ def list_custom_scripts():
 
     return all_scripts
 
+# Parse Script Metadata
+def parse_script_metadata(audit_script_path, audit_script_content):
+    """Parses metadata from the beginning of a script file."""
+
+    # Default metadata
+    metadata = {
+        'name': os.path.basename(audit_script_path),
+        'execution_frequency': 'once', # Options: once, every_15_min, every_day, no_enforcement
+        'show_in_self_service': False,
+        'self_service_category_id': None, # e.g. e6f6d5b4-0659-4b37-872c-5471115d453b
+        'self_service_recommended': False,
+        'active': True,
+        'restart': False
+    }
+
+    for line in audit_script_content.splitlines():
+        if line.startswith('# git2kandji-config:'):
+            try:
+                key, value = line[len('# git2kandji-config:'):].strip().split('=', 1)
+                key = key.strip()
+                value = value.strip()
+
+                # Handle boolean values
+                if value.lower() in ['true', 'false']:
+                    value = value.lower() == 'true'
+                # Handle None values
+                elif value.lower() == 'none':
+                    value = None
+                # Handle string values (including UUIDs)
+                else:
+                    # If it's not a boolean or None, keep it as a string (potentially a UUID)
+                    pass 
+
+                metadata[key] = value
+            except (ValueError, json.JSONDecodeError):
+                logger.warning(f"Invalid metadata in script '{audit_script_path}': {line}")
+
+    return metadata
+
 # Create Custom Script
 def create_custom_script(audit_script_path, remediation_script_path=None, script_name=None):
     """Create Kandji Custom Script"""
@@ -341,19 +379,22 @@ def create_custom_script(audit_script_path, remediation_script_path=None, script
         with open(remediation_script_path, 'r') as file:
             remediation_script_content = file.read()
 
+    # Parse metadata
+    metadata = parse_script_metadata(audit_script_path, audit_script_content)
+
     headers = {
         'Content-Type': 'application/json',
         'Authorization': f'Bearer {TOKEN}'
     }
 
     payload = {
-        'name': script_name,
-        'execution_frequency': 'once',
+        'name': metadata['name'],
+        'execution_frequency': metadata['execution_frequency'],
         'script': audit_script_content,
         'remediation_script': remediation_script_content,
-        'show_in_self_service': False,
-        'active': True,
-        'restart': False
+        'show_in_self_service': metadata['show_in_self_service'],
+        'active': metadata['active'],
+        'restart': metadata['restart']
     }
 
     payload = json.dumps(payload)
@@ -385,19 +426,22 @@ def update_custom_script(library_item_id, audit_script_path, remediation_script_
         with open(remediation_script_path, 'r') as file:
             remediation_script_content = file.read()
 
+    # Parse metadata
+    metadata = parse_script_metadata(audit_script_path, audit_script_content)
+
     headers = {
         'Content-Type': 'application/json',
         'Authorization': f'Bearer {TOKEN}'
     }
 
     payload = {
-        'name': script_name,
-        'execution_frequency': 'once',
+        'name': metadata['name'],
+        'execution_frequency': metadata['execution_frequency'],
         'script': audit_script_content,
         'remediation_script': remediation_script_content,
-        'show_in_self_service': False,
-        'active': True,
-        'restart': False
+        'show_in_self_service': metadata['show_in_self_service'],
+        'active': metadata['active'],
+        'restart': metadata['restart']
     }
 
     payload = json.dumps(payload)
@@ -555,15 +599,23 @@ def sync_kandji_scripts(local_scripts, kandji_scripts, dryrun=False):
         audit_script = scripts.get('audit')
         remediation_script = scripts.get('remediation')
 
+        # Parse metadata from the audit script (or remediation if audit is missing)
+        metadata_script = audit_script or remediation_script
+
+        metadata = {}
+        with open(metadata_script, 'r') as f:
+            metadata = parse_script_metadata(metadata_script, f.read())
+        
+        # Use the configured name or fallback to base_name
+        configured_name = metadata['name'] or base_name
+
         # If there's a remediation script but no audit script, log a warning and skip the update
         if remediation_script and not audit_script:
             logger.warning(f"Remediation script '{remediation_script}' found without a matching audit script. No update will be made.")
             continue
 
-        script_name = base_name  # Use the base name as the script name in Kandji
-
-        if script_name in kandji_script_dict:
-            kandji_script = kandji_script_dict[script_name]
+        if configured_name in kandji_script_dict:
+            kandji_script = kandji_script_dict[configured_name]
             audit_changed = False
             remediation_changed = False
 
@@ -580,24 +632,24 @@ def sync_kandji_scripts(local_scripts, kandji_scripts, dryrun=False):
                 remediation_changed = not compare_items(local_remediation_content, kandji_script.get('remediation_script', ''), is_xml=False)
             elif 'remediation_script' in kandji_script and kandji_script.get('remediation_script', ''):
                 # Remediation script exists in Kandji but not locally and needs to be removed
-                logger.info(f"Remediation script for '{script_name}' found in Kandji but not locally. It will be removed.")
+                logger.info(f"Remediation script for '{configured_name}' found in Kandji but not locally. It will be removed.")
                 remediation_changed = True
                 remediation_script = None  # Explicitly set to None to remove it
 
             # Only update if there are changes
             if audit_changed or remediation_changed:
                 if dryrun:
-                    logger.info(f"[DRY RUN] Would update Kandji Custom Script Library Item: {script_name}")
+                    logger.info(f"[DRY RUN] Would update Kandji Custom Script Library Item: {configured_name}")
                 else:
-                    logger.info(f"Updating Kandji Custom Script Library Item: {script_name}")
+                    logger.info(f"Updating Kandji Custom Script Library Item: {configured_name}")
                     update_custom_script(kandji_script["id"], audit_script, remediation_script, script_name)
             else:
-                logger.info(f"No changes detected for Kandji Custom Script Library Item: {script_name}")
+                logger.info(f"No changes detected for Kandji Custom Script Library Item: {configured_name}")
         else:
             if dryrun:
-                logger.info(f"[DRY RUN] Would create Kandji Custom Script Library Item: {script_name}")
+                logger.info(f"[DRY RUN] Would create Kandji Custom Script Library Item: {configured_name}")
             else:
-                logger.info(f"Creating Kandji Custom Script Library Item: {script_name}")
+                logger.info(f"Creating Kandji Custom Script Library Item: {configured_name}")
                 create_custom_script(audit_script, remediation_script, script_name)
 
 # Sync Kandji Profiles
