@@ -838,7 +838,7 @@ def download_profile(library_item_id, profile_dir):
     slugified_name = slugify(profile_name)
 
     # Check if the profile name is already included as a comment
-    comment = f"<!-- git2kandji-config:"
+    comment = f"<!-- git2kandji-config: name = {profile_name} -->"
     if comment not in profile_content:
         # Add the profile name as a comment at the beginning of the XML file after the XML declaration
         profile_content = profile_content.replace("<?xml version=\"1.0\" encoding=\"UTF-8\"?>", f"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n{comment}")
