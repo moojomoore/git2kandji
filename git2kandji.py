@@ -654,7 +654,7 @@ def sync_kandji_scripts(local_scripts, kandji_scripts, dryrun=False):
         remediation_script = scripts.get('remediation')
 
         # Parse metadata from the audit script (or remediation if audit is missing)
-        metadata_script = audit_script or remediation_script
+        metadata_script = audit_script
 
         metadata = {}
         with open(metadata_script, 'r') as f:
