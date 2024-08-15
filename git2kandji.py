@@ -772,6 +772,10 @@ def delete_items(kandji_items, local_items, delete_func, dryrun=False):
 # Download Script
 def download_script(library_item_id, script_dir):
     """Download a script from Kandji and save it locally."""
+
+    # Ensure the script directory exists
+    os.makedirs(script_dir, exist_ok=True)
+
     headers = {
         'Authorization': f'Bearer {TOKEN}'
     }
@@ -814,6 +818,10 @@ def download_script(library_item_id, script_dir):
 # Download Profile
 def download_profile(library_item_id, profile_dir):
     """Download a profile from Kandji and save it locally."""
+
+    # Ensure the profile directory exists
+    os.makedirs(profile_dir, exist_ok=True)
+
     headers = {
         'Authorization': f'Bearer {TOKEN}'
     }
