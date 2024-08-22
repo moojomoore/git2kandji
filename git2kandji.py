@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-SCRIPT_VERSION = "1.0.0"
+SCRIPT_VERSION = "1.1.0"
 
 import os
 import re
@@ -913,7 +913,6 @@ def main():
         if delete:
             logger.info("Delete flag enabled. Comparing Kandji profiles with the local repo for potential deletions.")
             delete_items(kandji_profiles, local_profiles, delete_custom_profile, dryrun)
-
 
         if download:
             logger.info("Download flag enabled. Downloading all profiles from Kandji.")
