@@ -1,6 +1,13 @@
 FROM python:3-slim
-COPY . /action
+
+RUN adduser --disabled-password --gecos "" appuser
+
+COPY --chown=appuser:appuser . /action
+
 WORKDIR /action
-RUN pip install --root-user-action=ignore -r requirements.txt
-ENTRYPOINT ["python3"]
-CMD ["/action/git2kandji.py"]
+
+USER appuser
+
+RUN pip install --user -r requirements.txt
+
+ENTRYPOINT ["python3", "/action/git2kandji.py"]

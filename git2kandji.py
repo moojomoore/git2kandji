@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 
-SCRIPT_VERSION = "1.0.0"
+SCRIPT_VERSION = "1.1.0"
 
 import os
+import re
 import sys
 import logging
 import argparse
@@ -12,6 +13,7 @@ import hashlib
 import requests
 from requests.adapters import HTTPAdapter
 import xml.etree.ElementTree as ET
+from slugify import slugify
 
 # Global variables
 SUBDOMAIN = None
@@ -81,6 +83,11 @@ def program_arguments():
         "--only-profiles",
         action = "store_true",
         help = "Only run the Kandji profile portion"
+    )
+    parser.add_argument(
+        "--download",
+        action = "store_true",
+        help = "Download existing scripts and profiles to local disk"
     )
     parser.add_argument(
         "--dryrun",
@@ -260,7 +267,6 @@ def normalize_xml_content(xml_content):
         logger.error(f"Failed to parse XML: {e}")
         return xml_content.strip()
 
-
 def compare_items(new, old, is_xml=False):
     """Compare two items. Normalize XML content if applicable."""
     if is_xml:
@@ -322,13 +328,48 @@ def list_custom_scripts():
 
     return all_scripts
 
-# Create Custom Script
-def create_custom_script(audit_script_path, remediation_script_path=None, script_name=None):
-    """Create Kandji Custom Script"""
+# Parse Script Metadata
+def parse_script_metadata(audit_script_path, audit_script_content):
+    """Parses metadata from the beginning of a script file."""
 
-    # If script_name is not provided, set it from audit_script_path
-    if not script_name:
-        script_name = os.path.basename(audit_script_path)
+    # Default metadata
+    metadata = {
+        'name': os.path.basename(audit_script_path),
+        'execution_frequency': 'once', # Options: once, every_15_min, every_day, no_enforcement
+        'show_in_self_service': False,
+        'self_service_category_id': None, # e.g. e6f6d5b4-0659-4b37-872c-5471115d453b
+        'self_service_recommended': False,
+        'active': True,
+        'restart': False
+    }
+
+    for line in audit_script_content.splitlines():
+        if line.startswith('# git2kandji-config:'):
+            try:
+                key, value = line[len('# git2kandji-config:'):].strip().split('=', 1)
+                key = key.strip()
+                value = value.strip()
+
+                # Handle boolean values
+                if value.lower() in ['true', 'false']:
+                    value = value.lower() == 'true'
+                # Handle None values
+                elif value.lower() == 'none':
+                    value = None
+                # Handle string values (including UUIDs)
+                else:
+                    # If it's not a boolean or None, keep it as a string (potentially a UUID)
+                    pass 
+
+                metadata[key] = value
+            except (ValueError, json.JSONDecodeError):
+                logger.warning(f"Invalid metadata in script '{audit_script_path}': {line}")
+
+    return metadata
+
+# Create Custom Script
+def create_custom_script(audit_script_path, remediation_script_path=None):
+    """Create Kandji Custom Script"""
 
     # Read Audit Script Content
     audit_script_content = ""
@@ -341,19 +382,22 @@ def create_custom_script(audit_script_path, remediation_script_path=None, script
         with open(remediation_script_path, 'r') as file:
             remediation_script_content = file.read()
 
+    # Parse metadata
+    metadata = parse_script_metadata(audit_script_path, audit_script_content)
+
     headers = {
         'Content-Type': 'application/json',
         'Authorization': f'Bearer {TOKEN}'
     }
 
     payload = {
-        'name': script_name,
-        'execution_frequency': 'once',
+        'name': metadata['name'],
+        'execution_frequency': metadata['execution_frequency'],
         'script': audit_script_content,
         'remediation_script': remediation_script_content,
-        'show_in_self_service': False,
-        'active': True,
-        'restart': False
+        'show_in_self_service': metadata['show_in_self_service'],
+        'active': metadata['active'],
+        'restart': metadata['restart']
     }
 
     payload = json.dumps(payload)
@@ -367,12 +411,8 @@ def create_custom_script(audit_script_path, remediation_script_path=None, script
     return response
 
 # Update Custom Script
-def update_custom_script(library_item_id, audit_script_path, remediation_script_path=None, script_name=None):
+def update_custom_script(library_item_id, audit_script_path, remediation_script_path=None):
     """Update Kandji Custom Script"""
-
-    # If script_name is not provided, set it from audit_script_path
-    if not script_name:
-        script_name = os.path.basename(audit_script_path)
 
     # Read Audit Script Content
     audit_script_content = ""
@@ -385,19 +425,22 @@ def update_custom_script(library_item_id, audit_script_path, remediation_script_
         with open(remediation_script_path, 'r') as file:
             remediation_script_content = file.read()
 
+    # Parse metadata
+    metadata = parse_script_metadata(audit_script_path, audit_script_content)
+
     headers = {
         'Content-Type': 'application/json',
         'Authorization': f'Bearer {TOKEN}'
     }
 
     payload = {
-        'name': script_name,
-        'execution_frequency': 'once',
+        'name': metadata['name'],
+        'execution_frequency': metadata['execution_frequency'],
         'script': audit_script_content,
         'remediation_script': remediation_script_content,
-        'show_in_self_service': False,
-        'active': True,
-        'restart': False
+        'show_in_self_service': metadata['show_in_self_service'],
+        'active': metadata['active'],
+        'restart': metadata['restart']
     }
 
     payload = json.dumps(payload)
@@ -464,12 +507,55 @@ def list_custom_profiles():
 
     return all_profiles
 
+# Parse Profile Metadata
+def parse_profile_metadata(profile_path, profile_content):
+    """Parses metadata from the XML comments in a profile file."""
+
+    # Default metadata
+    metadata = {
+        'name': os.path.basename(profile_path),
+        'active': True,
+    }
+
+    # Regex to match XML comments
+    comment_pattern = re.compile(r'<!--\s*git2kandji-config:\s*(.*?)\s*-->')
+
+    for match in comment_pattern.findall(profile_content):
+        try:
+            key, value = match.split('=', 1)
+            key = key.strip()
+            value = value.strip()
+
+            # Handle boolean values
+            if value.lower() in ['true', 'false']:
+                value = value.lower() == 'true'
+            # Handle None values
+            elif value.lower() == 'none':
+                value = None
+            # Handle string values (including UUIDs)
+            else:
+                # If it's not a boolean or None, keep it as a string (potentially a UUID)
+                pass 
+
+            metadata[key] = value
+        except (ValueError, ET.ParseError):
+            logger.warning(f"Invalid metadata in profile '{profile_path}': {match}")
+
+    return metadata
+
 # Create Custom Profile
 def create_custom_profile(profile_path):
     """Create Kandji Custom Profile"""
 
     # Set Profile Name
     profile_name = os.path.basename(profile_path)
+    
+    # Read Profile Content
+    with open(profile_path, 'r') as file:
+        profile_content = file.read()
+
+    # Parse Metadata
+    metadata = parse_profile_metadata(profile_path, profile_content)
 
     # Profile Content
     files = {
@@ -481,7 +567,8 @@ def create_custom_profile(profile_path):
     }
 
     payload = {
-        'name': profile_name
+        'name': metadata['name'],
+        'active': metadata['active']
     }
 
     response = kandji_api(
@@ -500,6 +587,11 @@ def update_custom_profile(library_item_id, profile_path):
     # Profile Name
     profile_name = os.path.basename(profile_path)
 
+    with open(profile_path, 'r') as file:
+        profile_content = file.read()
+
+    metadata = parse_profile_metadata(profile_path, profile_content)
+
     # Profile Content
     files = {
             'file': (profile_name, open(profile_path, 'rb'), 'application/octet-stream')
@@ -509,10 +601,16 @@ def update_custom_profile(library_item_id, profile_path):
         'Authorization': f'Bearer {TOKEN}'
     }
 
+    payload = {
+        'name': metadata['name'],
+        'active': metadata['active']
+    }
+
     response = kandji_api(
         method = "PATCH",
         endpoint = f"/v1/library/custom-profiles/{library_item_id}",
         headers = headers,
+        payload = payload,
         files = files
     )
     return response
@@ -555,15 +653,23 @@ def sync_kandji_scripts(local_scripts, kandji_scripts, dryrun=False):
         audit_script = scripts.get('audit')
         remediation_script = scripts.get('remediation')
 
+        # Parse metadata from the audit script (or remediation if audit is missing)
+        metadata_script = audit_script
+
+        metadata = {}
+        with open(metadata_script, 'r') as f:
+            metadata = parse_script_metadata(metadata_script, f.read())
+        
+        # Use the configured name or fallback to base_name
+        configured_name = metadata['name'] or base_name
+
         # If there's a remediation script but no audit script, log a warning and skip the update
         if remediation_script and not audit_script:
             logger.warning(f"Remediation script '{remediation_script}' found without a matching audit script. No update will be made.")
             continue
 
-        script_name = base_name  # Use the base name as the script name in Kandji
-
-        if script_name in kandji_script_dict:
-            kandji_script = kandji_script_dict[script_name]
+        if configured_name in kandji_script_dict:
+            kandji_script = kandji_script_dict[configured_name]
             audit_changed = False
             remediation_changed = False
 
@@ -580,25 +686,25 @@ def sync_kandji_scripts(local_scripts, kandji_scripts, dryrun=False):
                 remediation_changed = not compare_items(local_remediation_content, kandji_script.get('remediation_script', ''), is_xml=False)
             elif 'remediation_script' in kandji_script and kandji_script.get('remediation_script', ''):
                 # Remediation script exists in Kandji but not locally and needs to be removed
-                logger.info(f"Remediation script for '{script_name}' found in Kandji but not locally. It will be removed.")
+                logger.info(f"Remediation script for '{configured_name}' found in Kandji but not locally. It will be removed.")
                 remediation_changed = True
                 remediation_script = None  # Explicitly set to None to remove it
 
             # Only update if there are changes
             if audit_changed or remediation_changed:
                 if dryrun:
-                    logger.info(f"[DRY RUN] Would update Kandji Custom Script Library Item: {script_name}")
+                    logger.info(f"[DRY RUN] Would update Kandji Custom Script Library Item: {configured_name}")
                 else:
-                    logger.info(f"Updating Kandji Custom Script Library Item: {script_name}")
-                    update_custom_script(kandji_script["id"], audit_script, remediation_script, script_name)
+                    logger.info(f"Updating Kandji Custom Script Library Item: {configured_name}")
+                    update_custom_script(kandji_script["id"], audit_script, remediation_script)
             else:
-                logger.info(f"No changes detected for Kandji Custom Script Library Item: {script_name}")
+                logger.info(f"No changes detected for Kandji Custom Script Library Item: {configured_name}")
         else:
             if dryrun:
-                logger.info(f"[DRY RUN] Would create Kandji Custom Script Library Item: {script_name}")
+                logger.info(f"[DRY RUN] Would create Kandji Custom Script Library Item: {configured_name}")
             else:
-                logger.info(f"Creating Kandji Custom Script Library Item: {script_name}")
-                create_custom_script(audit_script, remediation_script, script_name)
+                logger.info(f"Creating Kandji Custom Script Library Item: {configured_name}")
+                create_custom_script(audit_script, remediation_script)
 
 # Sync Kandji Profiles
 def sync_kandji_profiles(local_profiles, kandji_profiles, dryrun=False):
@@ -606,27 +712,39 @@ def sync_kandji_profiles(local_profiles, kandji_profiles, dryrun=False):
 
     for local_profile in local_profiles:
         profile_name = os.path.basename(local_profile)
-        if profile_name in kandji_profile_dict:
-            kandji_profile = kandji_profile_dict[profile_name]
+
+        metadata = {}
+        with open(local_profile, 'r') as f:
+            metadata = parse_profile_metadata(local_profile, f.read())
+        
+        # Use the configured name or fallback to base_name
+        configured_name = metadata['name'] or profile_name
+        
+        if configured_name in kandji_profile_dict:
+            kandji_profile = kandji_profile_dict[configured_name]
             with open(local_profile, 'r') as f:
                 local_content = f.read()
-            kandji_content = kandji_profile.get('profile')
+            kandji_content = kandji_profile.get('profile')            
+            kandji_status = kandji_profile.get('active')
+
+            metadata_changed = metadata['active'] != kandji_status
+
             if kandji_content:
-                if not compare_items(local_content, kandji_content, is_xml=True):
+                if not compare_items(local_content, kandji_content, is_xml=True) or metadata_changed:
                     if dryrun:
-                        logger.info(f"[DRY RUN] Would update Kandji Custom Profile Library Item: {profile_name}")
+                        logger.info(f"[DRY RUN] Would update Kandji Custom Profile Library Item: {configured_name}")
                     else:
-                        logger.info(f"Updating Kandji Custom Profile Library Item: {profile_name}")
+                        logger.info(f"Updating Kandji Custom Profile Library Item: {configured_name}")
                         update_custom_profile(kandji_profile["id"], local_profile)
                 else:
-                    logger.info(f"No changes detected for Kandji Custom Profile Library Item: {profile_name}")
+                    logger.info(f"No changes detected for Kandji Custom Profile Library Item: {configured_name}")
             else:
-                logger.warning(f"No content found for Kandji profile: {profile_name}")
+                logger.warning(f"No content found for Kandji profile: {configured_name}")
         else:
             if dryrun:
-                logger.info(f"[DRY RUN] Would create Kandji Custom Profile Library Item: {profile_name}")
+                logger.info(f"[DRY RUN] Would create Kandji Custom Profile Library Item: {configured_name}")
             else:
-                logger.info(f"Creating Kandji Custom Profile Library Item: {profile_name}")
+                logger.info(f"Creating Kandji Custom Profile Library Item: {configured_name}")
                 create_custom_profile(local_profile)
 
 # Delete Kandji Items
@@ -650,6 +768,85 @@ def delete_items(kandji_items, local_items, delete_func, dryrun=False):
             else:
                 logger.info(f"Deleting Kandji item '{item_name}'")
                 delete_func(item["id"])
+
+# Download Script
+def download_script(library_item_id, script_dir):
+    """Download a script from Kandji and save it locally."""
+
+    # Ensure the script directory exists
+    os.makedirs(script_dir, exist_ok=True)
+
+    headers = {
+        'Authorization': f'Bearer {TOKEN}'
+    }
+
+    response = kandji_api(
+        method="GET",
+        endpoint=f"/v1/library/custom-scripts/{library_item_id}",
+        headers=headers
+    )
+
+    script_name = response["name"]
+    audit_content = response["script"]
+    remediation_content = response.get("remediation_script", "")  # Handle missing remediation
+
+    # Slugify script name for filenames
+    slugified_name = slugify(script_name)
+
+    # Save audit script with metadata config
+    audit_file_path = os.path.join(script_dir, f"audit_{slugified_name}.sh")
+
+    contains_config = "# git2kandji-config: " in audit_content
+
+    with open(audit_file_path, 'w') as f:
+        if contains_config:
+            f.write(audit_content)
+        else:
+            # Check for shebang and add metadata config below it if present
+            if audit_content.startswith("#!"):
+                shebang, rest_of_content = audit_content.split('\n', 1)
+                f.write(f"{shebang}\n\n# git2kandji-config: name = {script_name}\n\n{rest_of_content}")
+            else:
+                f.write(f"# git2kandji-config: name = {script_name}\n\n{audit_content}")
+
+    # Save remediation script if it exists (with slugified name)
+    if remediation_content:
+        remediation_file_path = os.path.join(script_dir, f"remediation_{slugified_name}.sh")
+        with open(remediation_file_path, 'w') as f:
+            f.write(remediation_content)
+
+# Download Profile
+def download_profile(library_item_id, profile_dir):
+    """Download a profile from Kandji and save it locally."""
+
+    # Ensure the profile directory exists
+    os.makedirs(profile_dir, exist_ok=True)
+
+    headers = {
+        'Authorization': f'Bearer {TOKEN}'
+    }
+
+    response = kandji_api(
+        method="GET",
+        endpoint=f"/v1/library/custom-profiles/{library_item_id}",
+        headers=headers
+    )
+
+    profile_name = response["name"]
+    profile_content = response["profile"]
+
+    slugified_name = slugify(profile_name)
+
+    # Check if the profile name is already included as a comment
+    comment = f"<!-- git2kandji-config: name = {profile_name} -->"
+    if comment not in profile_content:
+        # Add the profile name as a comment at the beginning of the XML file after the XML declaration
+        profile_content = profile_content.replace("<?xml version=\"1.0\" encoding=\"UTF-8\"?>", f"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n{comment}")
+
+    # Save profile
+    profile_file_path = os.path.join(profile_dir, slugified_name + ".mobileconfig")
+    with open(profile_file_path, 'w') as f:
+        f.write(profile_content)
 
 # Main Logic
 def main():
@@ -686,7 +883,8 @@ def main():
     delete = args.delete or os.getenv("INPUT_DELETE", "false").lower() == "true"
     only_scripts = args.only_scripts or os.getenv("INPUT_ONLY_SCRIPTS", "false").lower() == "true"
     only_profiles = args.only_profiles or os.getenv("INPUT_ONLY_PROFILES", "false").lower() == "true"
-    
+    download = args.download or os.getenv("INPUT_DOWNLOAD", "false").lower() == "true"
+
     # Determine which portions to run
     if only_scripts:
         logger.info("Running Kandji script portion only.")
@@ -698,6 +896,14 @@ def main():
             logger.info("Delete flag enabled. Comparing Kandji scripts with the local repo for potential deletions.")
             delete_items(kandji_scripts, local_scripts, delete_custom_script, dryrun)
 
+        if download:
+            logger.info("Download flag enabled. Downloading all scripts from Kandji.")
+
+            # Download scripts
+            kandji_scripts = list_custom_scripts()
+            for script in kandji_scripts:
+                download_script(script["id"], script_dir)
+
     if only_profiles:
         logger.info("Running Kandji profile portion only.")
         local_profiles = find_local_items(profile_dir, profile_ext, item_type="profile")
@@ -707,6 +913,14 @@ def main():
         if delete:
             logger.info("Delete flag enabled. Comparing Kandji profiles with the local repo for potential deletions.")
             delete_items(kandji_profiles, local_profiles, delete_custom_profile, dryrun)
+
+        if download:
+            logger.info("Download flag enabled. Downloading all profiles from Kandji.")
+
+            # Download profiles
+            kandji_profiles = list_custom_profiles()
+            for profile in kandji_profiles:
+                download_profile(profile["id"], profile_dir)
 
     # Run both if neither flag is specified
     if not only_scripts and not only_profiles:
@@ -725,6 +939,19 @@ def main():
             logger.info("Delete flag enabled. Comparing Kandji scripts and profiles with the local repo for potential deletions.")
             delete_items(kandji_scripts, local_scripts, delete_custom_script, dryrun)
             delete_items(kandji_profiles, local_profiles, delete_custom_profile, dryrun)
+
+        if download:
+            logger.info("Download flag enabled. Downloading all scripts and profiles from Kandji.")
+
+            # Download scripts
+            kandji_scripts = list_custom_scripts()
+            for script in kandji_scripts:
+                download_script(script["id"], script_dir)
+
+            # Download profiles
+            kandji_profiles = list_custom_profiles()
+            for profile in kandji_profiles:
+                download_profile(profile["id"], profile_dir)
 
 if __name__ == "__main__":
     main()
