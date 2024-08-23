@@ -515,6 +515,10 @@ def parse_profile_metadata(profile_path, profile_content):
     metadata = {
         'name': os.path.basename(profile_path),
         'active': True,
+        'runs_on_mac': False,
+        'runs_on_iphone': False,
+        'runs_on_ipad': False,
+        'runs_on_tv': False
     }
 
     # Regex to match XML comments
@@ -526,22 +530,60 @@ def parse_profile_metadata(profile_path, profile_content):
             key = key.strip()
             value = value.strip()
 
-            # Handle boolean values
-            if value.lower() in ['true', 'false']:
-                value = value.lower() == 'true'
-            # Handle None values
-            elif value.lower() == 'none':
-                value = None
-            # Handle string values (including UUIDs)
+            # Handle the runs_on key for comma-separated list
+            if key == 'runs_on':
+                devices = [device.strip() for device in value.split(',')]
+                for device in devices:
+                    if device == 'mac':
+                        metadata['runs_on_mac'] = True
+                    elif device == 'iphone':
+                        metadata['runs_on_iphone'] = True
+                    elif device == 'ipad':
+                        metadata['runs_on_ipad'] = True
+                    elif device == 'tv':
+                        metadata['runs_on_tv'] = True
             else:
-                # If it's not a boolean or None, keep it as a string (potentially a UUID)
-                pass 
+                # Handle boolean values
+                if value.lower() in ['true', 'false']:
+                    value = value.lower() == 'true'
+                # Handle None values
+                elif value.lower() == 'none':
+                    value = None
+                # Handle string values (including UUIDs)
+                else:
+                    # If it's not a boolean or None, keep it as a string (potentially a UUID)
+                    pass 
 
-            metadata[key] = value
+                metadata[key] = value
         except (ValueError, ET.ParseError):
             logger.warning(f"Invalid metadata in profile '{profile_path}': {match}")
 
     return metadata
+
+# Compare the extracted metadata with the API response
+def compare_profile_metadata(local_metadata, api_metadata):
+    """Compare local profile metadata with API response metadata."""
+    
+    # Fields to compare with their default values
+    fields_to_compare = {
+        'name': None,
+        'active': True,
+        'runs_on_mac': False,
+        'runs_on_iphone': False,
+        'runs_on_ipad': False,
+        'runs_on_tv': False,
+    }
+
+    # Check each field for discrepancies
+    for field, default_value in fields_to_compare.items():
+        local_value = local_metadata.get(field, default_value)
+        api_value = api_metadata.get(field, default_value)
+        
+        if local_value != api_value:
+            logger.debug(f"Discrepancy found in '{field}': Local({local_value}) != API({api_value})")
+            return False  # Return False if any field doesn't match
+    
+    return True  # Return True if all fields match
 
 # Create Custom Profile
 def create_custom_profile(profile_path):
@@ -568,7 +610,11 @@ def create_custom_profile(profile_path):
 
     payload = {
         'name': metadata['name'],
-        'active': metadata['active']
+        'active': metadata['active'],
+        'runs_on_mac': metadata['runs_on_mac'],
+        'runs_on_iphone': metadata['runs_on_iphone'],
+        'runs_on_ipad': metadata['runs_on_ipad'],
+        'runs_on_tv': metadata['runs_on_tv']
     }
 
     response = kandji_api(
@@ -603,7 +649,11 @@ def update_custom_profile(library_item_id, profile_path):
 
     payload = {
         'name': metadata['name'],
-        'active': metadata['active']
+        'active': metadata['active'],
+        'runs_on_mac': metadata['runs_on_mac'],
+        'runs_on_iphone': metadata['runs_on_iphone'],
+        'runs_on_ipad': metadata['runs_on_ipad'],
+        'runs_on_tv': metadata['runs_on_tv']
     }
 
     response = kandji_api(
@@ -713,33 +763,40 @@ def sync_kandji_profiles(local_profiles, kandji_profiles, dryrun=False):
     for local_profile in local_profiles:
         profile_name = os.path.basename(local_profile)
 
-        metadata = {}
+        # Read local profile content and parse metadata
         with open(local_profile, 'r') as f:
-            metadata = parse_profile_metadata(local_profile, f.read())
+            local_content = f.read()
+            local_metadata = parse_profile_metadata(local_profile, local_content)
         
         # Use the configured name or fallback to base_name
-        configured_name = metadata['name'] or profile_name
+        configured_name = local_metadata['name'] or profile_name
         
         if configured_name in kandji_profile_dict:
             kandji_profile = kandji_profile_dict[configured_name]
-            with open(local_profile, 'r') as f:
-                local_content = f.read()
             kandji_content = kandji_profile.get('profile')            
-            kandji_status = kandji_profile.get('active')
 
-            metadata_changed = metadata['active'] != kandji_status
+            # Create kandji_metadata based on API response
+            kandji_metadata = {
+                'name': kandji_profile.get('name'),
+                'active': kandji_profile.get('active'),
+                'runs_on_mac': kandji_profile.get('runs_on_mac'),
+                'runs_on_iphone': kandji_profile.get('runs_on_iphone'),
+                'runs_on_ipad': kandji_profile.get('runs_on_ipad'),
+                'runs_on_tv': kandji_profile.get('runs_on_tv')
+            }
 
-            if kandji_content:
-                if not compare_items(local_content, kandji_content, is_xml=True) or metadata_changed:
-                    if dryrun:
-                        logger.info(f"[DRY RUN] Would update Kandji Custom Profile Library Item: {configured_name}")
-                    else:
-                        logger.info(f"Updating Kandji Custom Profile Library Item: {configured_name}")
-                        update_custom_profile(kandji_profile["id"], local_profile)
+            # Compare metadata and content
+            metadata_changed = not compare_profile_metadata(local_metadata, kandji_metadata)
+            content_changed = not compare_items(local_content, kandji_content, is_xml=True)
+
+            if content_changed or metadata_changed:
+                if dryrun:
+                    logger.info(f"[DRY RUN] Would update Kandji Custom Profile Library Item: {configured_name}")
                 else:
-                    logger.info(f"No changes detected for Kandji Custom Profile Library Item: {configured_name}")
+                    logger.info(f"Updating Kandji Custom Profile Library Item: {configured_name}")
+                    update_custom_profile(kandji_profile["id"], local_profile)
             else:
-                logger.warning(f"No content found for Kandji profile: {configured_name}")
+                logger.info(f"No changes detected for Kandji Custom Profile Library Item: {configured_name}")
         else:
             if dryrun:
                 logger.info(f"[DRY RUN] Would create Kandji Custom Profile Library Item: {configured_name}")
