@@ -385,6 +385,9 @@ def create_custom_script(audit_script_path, remediation_script_path=None):
     # Parse metadata
     metadata = parse_script_metadata(audit_script_path, audit_script_content)
 
+    # Truncate the name if necessary
+    metadata['name'] = truncate_name(metadata['name'])
+
     headers = {
         'Content-Type': 'application/json',
         'Authorization': f'Bearer {TOKEN}'
@@ -427,6 +430,9 @@ def update_custom_script(library_item_id, audit_script_path, remediation_script_
 
     # Parse metadata
     metadata = parse_script_metadata(audit_script_path, audit_script_content)
+
+    # Truncate the name if necessary
+    metadata['name'] = truncate_name(metadata['name'])
 
     headers = {
         'Content-Type': 'application/json',
@@ -557,6 +563,9 @@ def create_custom_profile(profile_path):
     # Parse Metadata
     metadata = parse_profile_metadata(profile_path, profile_content)
 
+    # Truncate the name if necessary
+    metadata['name'] = truncate_name(metadata['name'])
+
     # Profile Content
     files = {
             'file': (profile_name, open(profile_path, 'rb'), 'application/octet-stream')
@@ -591,6 +600,9 @@ def update_custom_profile(library_item_id, profile_path):
         profile_content = file.read()
 
     metadata = parse_profile_metadata(profile_path, profile_content)
+
+    # Truncate the name if necessary
+    metadata['name'] = truncate_name(metadata['name'])
 
     # Profile Content
     files = {
@@ -847,6 +859,15 @@ def download_profile(library_item_id, profile_dir):
     profile_file_path = os.path.join(profile_dir, slugified_name + ".mobileconfig")
     with open(profile_file_path, 'w') as f:
         f.write(profile_content)
+
+# Truncate Library Item Names if too long (Current limit is 50 characters)
+def truncate_name(name, max_length=50):
+    """Truncate the name to ensure it doesn't exceed the max length."""
+    if len(name) > max_length:
+        truncated_name = name[:max_length]
+        logger.warning(f"Name '{name}' is too long and has been truncated to '{truncated_name}'")
+        return truncated_name
+    return name
 
 # Main Logic
 def main():
