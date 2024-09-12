@@ -973,7 +973,7 @@ def download_profile(library_item_id, profile_dir):
     id_comment = f"<!-- git2kandji-config: library_item_id = {library_item_id} -->"
     runs_on_comment = f"<!-- git2kandji-config: runs_on = {runs_on} -->"
     
-    if name_comment not in profile_content or id_comment not in profile_content:
+    if name_comment not in profile_content or id_comment not in profile_content or runs_on_comment not in profile_content:
         # Add the profile name and library_item_id as comments at the beginning of the XML file after the XML declaration
         profile_content = profile_content.replace("<?xml version=\"1.0\" encoding=\"UTF-8\"?>", f"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n{name_comment}\n{id_comment}\n{runs_on_comment}")
 
