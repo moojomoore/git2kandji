@@ -33,7 +33,6 @@ def get_base_url(SUBDOMAIN, REGION):
         logger.error(f"Unsupported region {REGION}. Please update and try again.")
         sys.exit(1)
 
-# Program Arguments
 def program_arguments():
     """Return Program Arguments."""
     parser = argparse.ArgumentParser(
@@ -104,7 +103,16 @@ def program_arguments():
         "--version", action="version", 
         version = f'%(prog)s {SCRIPT_VERSION}', 
         help = "show this script's version"
-        )
+    )
+    # Add new arguments for Slack integration
+    parser.add_argument(
+        "--slack-webhook-url",
+        help = "Slack webhook URL for sending notifications"
+    )
+    parser.add_argument(
+        "--slack-channel",
+        help = "Slack channel to send notifications to (optional)"
+    )
 
     return parser.parse_args()
 
@@ -694,7 +702,23 @@ def delete_custom_profile(library_item_id):
 
 # Sync Kandji Scripts
 def sync_kandji_scripts(local_scripts, kandji_scripts, dryrun=False):
+    """
+    Synchronize local scripts with Kandji.
+
+    This function compares local scripts with those in Kandji, creating or updating
+    as necessary. It now also tracks and returns the number of scripts created and updated.
+
+    Args:
+    local_scripts (list): List of local script paths.
+    kandji_scripts (list): List of scripts from Kandji.
+    dryrun (bool): If True, only log actions without making changes.
+
+    Returns:
+    dict: A dictionary containing counts of created and updated scripts.
+    """
     kandji_script_dict = {script["name"]: script for script in kandji_scripts}
+    created = 0
+    updated = 0
 
     # Group audit and remediation scripts
     grouped_scripts = {}
@@ -716,8 +740,7 @@ def sync_kandji_scripts(local_scripts, kandji_scripts, dryrun=False):
         remediation_script = scripts.get('remediation')
 
         # Parse metadata from the audit script (or remediation if audit is missing)
-        metadata_script = audit_script
-
+        metadata_script = audit_script or remediation_script
         metadata = {}
         with open(metadata_script, 'r') as f:
             metadata = parse_script_metadata(metadata_script, f.read())
@@ -759,6 +782,7 @@ def sync_kandji_scripts(local_scripts, kandji_scripts, dryrun=False):
                 else:
                     logger.info(f"Updating Kandji Custom Script Library Item: {configured_name}")
                     update_custom_script(kandji_script["id"], audit_script, remediation_script)
+                    updated += 1
             else:
                 logger.info(f"No changes detected for Kandji Custom Script Library Item: {configured_name}")
         else:
@@ -767,10 +791,28 @@ def sync_kandji_scripts(local_scripts, kandji_scripts, dryrun=False):
             else:
                 logger.info(f"Creating Kandji Custom Script Library Item: {configured_name}")
                 create_custom_script(audit_script, remediation_script)
+                created += 1
 
-# Sync Kandji Profiles
+    return {"created": created, "updated": updated}
+
 def sync_kandji_profiles(local_profiles, kandji_profiles, dryrun=False):
+    """
+    Synchronize local profiles with Kandji.
+
+    This function compares local profiles with those in Kandji, creating or updating
+    as necessary. It now also tracks and returns the number of profiles created and updated.
+
+    Args:
+    local_profiles (list): List of local profile paths.
+    kandji_profiles (list): List of profiles from Kandji.
+    dryrun (bool): If True, only log actions without making changes.
+
+    Returns:
+    dict: A dictionary containing counts of created and updated profiles.
+    """
     kandji_profile_dict = {profile["name"]: profile for profile in kandji_profiles}
+    created = 0
+    updated = 0
 
     for local_profile in local_profiles:
         profile_name = os.path.basename(local_profile)
@@ -807,6 +849,7 @@ def sync_kandji_profiles(local_profiles, kandji_profiles, dryrun=False):
                 else:
                     logger.info(f"Updating Kandji Custom Profile Library Item: {configured_name}")
                     update_custom_profile(kandji_profile["id"], local_profile)
+                    updated += 1
             else:
                 logger.info(f"No changes detected for Kandji Custom Profile Library Item: {configured_name}")
         else:
@@ -815,9 +858,26 @@ def sync_kandji_profiles(local_profiles, kandji_profiles, dryrun=False):
             else:
                 logger.info(f"Creating Kandji Custom Profile Library Item: {configured_name}")
                 create_custom_profile(local_profile)
+                created += 1
 
-# Delete Kandji Items
+    return {"created": created, "updated": updated}
+
 def delete_items(kandji_items, local_items, delete_func, dryrun=False):
+    """
+    Delete Kandji items that are not present in the local repository.
+
+    This function compares Kandji items with local items and deletes those
+    that are not present locally. It now also tracks and returns the number of items deleted.
+
+    Args:
+    kandji_items (list): List of items from Kandji.
+    local_items (list): List of local item paths.
+    delete_func (function): Function to call for deleting an item.
+    dryrun (bool): If True, only log actions without making changes.
+
+    Returns:
+    int: The number of items deleted.
+    """
     # Create a set of local item names without prefixes
     local_names = set()
     for local_item in local_items:
@@ -829,6 +889,8 @@ def delete_items(kandji_items, local_items, delete_func, dryrun=False):
         else:
             local_names.add(base_name)
 
+    deleted = 0
+
     for item in kandji_items:
         item_name = item["name"]
         if item_name not in local_names:
@@ -837,6 +899,9 @@ def delete_items(kandji_items, local_items, delete_func, dryrun=False):
             else:
                 logger.info(f"Deleting Kandji item '{item_name}'")
                 delete_func(item["id"])
+                deleted += 1
+
+    return deleted
 
 # Download Script
 def download_script(library_item_id, script_dir):
@@ -926,12 +991,46 @@ def truncate_name(name, max_length=50):
         return truncated_name
     return name
 
-# Main Logic
+def send_slack_message(webhook_url, message, channel=None):
+    """
+    Send a message to Slack using the provided webhook URL.
+    
+    This function constructs a JSON payload and sends it to the Slack API
+    using the requests library. It handles potential errors and logs them.
+
+    Args:
+    webhook_url (str): The Slack webhook URL to send the message to.
+    message (str): The message to be sent to Slack.
+    channel (str, optional): The Slack channel to send the message to. 
+                             If not provided, the default channel for the webhook is used.
+
+    Returns:
+    None
+    """
+    # Construct the Slack message payload
+    slack_data = {"text": message}
+    if channel:
+        slack_data["channel"] = channel
+
+    try:
+        # Send the POST request to the Slack webhook
+        response = requests.post(
+            webhook_url,
+            data=json.dumps(slack_data),
+            headers={'Content-Type': 'application/json'}
+        )
+        response.raise_for_status()  # Raises an HTTPError for bad responses
+        logger.info("Slack notification sent successfully")
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Failed to send Slack notification: {str(e)}")
+        if hasattr(e, 'response') and e.response:
+            logger.error(f"Response content: {e.response.content}")
+
 def main():
-    """Run main logic."""
+    """Do the main thing"""
     global SUBDOMAIN, REGION, TOKEN, BASE_URL
 
-     # Return Program Arguments
+    # Return Program Arguments
     args = program_arguments()
 
     # Set logging level based on argument
@@ -963,73 +1062,56 @@ def main():
     only_profiles = args.only_profiles or os.getenv("INPUT_ONLY_PROFILES", "false").lower() == "true"
     download = args.download or os.getenv("INPUT_DOWNLOAD", "false").lower() == "true"
 
-    # Determine which portions to run
-    if only_scripts:
-        logger.info("Running Kandji script portion only.")
+    # Initialize result tracking
+    results = {
+        "scripts": {"created": 0, "updated": 0, "deleted": 0},
+        "profiles": {"created": 0, "updated": 0, "deleted": 0}
+    }
+
+    # Sync scripts if required
+    if only_scripts or not only_profiles:
         local_scripts = find_local_items(script_dir, script_ext, item_type="script")
         kandji_scripts = list_custom_scripts()
-        sync_kandji_scripts(local_scripts, kandji_scripts, dryrun)
+        script_results = sync_kandji_scripts(local_scripts, kandji_scripts, dryrun)
+        results["scripts"]["created"] = script_results["created"]
+        results["scripts"]["updated"] = script_results["updated"]
 
-        if delete:
-            logger.info("Delete flag enabled. Comparing Kandji scripts with the local repo for potential deletions.")
-            delete_items(kandji_scripts, local_scripts, delete_custom_script, dryrun)
-
-        if download:
-            logger.info("Download flag enabled. Downloading all scripts from Kandji.")
-
-            # Download scripts
-            kandji_scripts = list_custom_scripts()
-            for script in kandji_scripts:
-                download_script(script["id"], script_dir)
-
-    if only_profiles:
-        logger.info("Running Kandji profile portion only.")
+    # Sync profiles if required
+    if only_profiles or not only_scripts:
         local_profiles = find_local_items(profile_dir, profile_ext, item_type="profile")
         kandji_profiles = list_custom_profiles()
-        sync_kandji_profiles(local_profiles, kandji_profiles, dryrun)
+        profile_results = sync_kandji_profiles(local_profiles, kandji_profiles, dryrun)
+        results["profiles"]["created"] = profile_results["created"]
+        results["profiles"]["updated"] = profile_results["updated"]
 
-        if delete:
-            logger.info("Delete flag enabled. Comparing Kandji profiles with the local repo for potential deletions.")
-            delete_items(kandji_profiles, local_profiles, delete_custom_profile, dryrun)
+    # Handle deletions if required
+    if delete:
+        logger.info("Delete flag enabled. Comparing Kandji items with the local repo for potential deletions.")
+        if only_scripts or not only_profiles:
+            results["scripts"]["deleted"] = delete_items(kandji_scripts, local_scripts, delete_custom_script, dryrun)
+        if only_profiles or not only_scripts:
+            results["profiles"]["deleted"] = delete_items(kandji_profiles, local_profiles, delete_custom_profile, dryrun)
 
-        if download:
-            logger.info("Download flag enabled. Downloading all profiles from Kandji.")
-
-            # Download profiles
-            kandji_profiles = list_custom_profiles()
+    # Handle downloads if required
+    if download:
+        logger.info("Download flag enabled. Downloading all scripts and profiles from Kandji.")
+        if only_scripts or not only_profiles:
+            for script in kandji_scripts:
+                download_script(script["id"], script_dir)
+        if only_profiles or not only_scripts:
             for profile in kandji_profiles:
                 download_profile(profile["id"], profile_dir)
 
-    # Run both if neither flag is specified
-    if not only_scripts and not only_profiles:
-        logger.info("Running both Kandji script and profile portions.")
-        # Find and sync scripts
-        local_scripts = find_local_items(script_dir, script_ext, item_type="script")
-        kandji_scripts = list_custom_scripts()
-        sync_kandji_scripts(local_scripts, kandji_scripts, dryrun)
+    # Send Slack notification if webhook URL is provided
+    if args.slack_webhook_url:
+        summary = f"*Git2Kandji Sync Summary:*\n"
+        summary += f"Scripts: Created: {results['scripts']['created']}, Updated: {results['scripts']['updated']}, Deleted: {results['scripts']['deleted']}\n"
+        summary += f"Profiles: Created: {results['profiles']['created']}, Updated: {results['profiles']['updated']}, Deleted: {results['profiles']['deleted']}\n"
+        if dryrun:
+            summary = "[DRY RUN] " + summary
+        send_slack_message(args.slack_webhook_url, summary, args.slack_channel)
 
-        # Find and sync profiles
-        local_profiles = find_local_items(profile_dir, profile_ext, item_type="profile")
-        kandji_profiles = list_custom_profiles()
-        sync_kandji_profiles(local_profiles, kandji_profiles, dryrun)
-
-        if delete:
-            logger.info("Delete flag enabled. Comparing Kandji scripts and profiles with the local repo for potential deletions.")
-            delete_items(kandji_scripts, local_scripts, delete_custom_script, dryrun)
-            delete_items(kandji_profiles, local_profiles, delete_custom_profile, dryrun)
-
-        if download:
-            logger.info("Download flag enabled. Downloading all scripts and profiles from Kandji.")
-
-            # Download scripts
-            kandji_scripts = list_custom_scripts()
-            for script in kandji_scripts:
-                download_script(script["id"], script_dir)
-
-            # Download profiles
-            kandji_profiles = list_custom_profiles()
-            for profile in kandji_profiles:
-                download_profile(profile["id"], profile_dir)
+    logger.info("Git2Kandji sync completed successfully.")
 
 if __name__ == "__main__":
     main()
