@@ -386,9 +386,6 @@ def create_custom_script(audit_script_path, remediation_script_path=None):
     # Parse metadata
     metadata = parse_script_metadata(audit_script_path, audit_script_content)
 
-    # Truncate the name if necessary
-    metadata['name'] = truncate_name(metadata['name'])
-
     headers = {
         'Content-Type': 'application/json',
         'Authorization': f'Bearer {TOKEN}'
@@ -434,9 +431,6 @@ def update_custom_script(library_item_id, audit_script_path, remediation_script_
 
     # Use the library_item_id from metadata if provided
     library_item_id = metadata['library_item_id'] or library_item_id
-
-    # Truncate the name if necessary
-    metadata['name'] = truncate_name(metadata['name'])
 
     headers = {
         'Content-Type': 'application/json',
@@ -610,9 +604,6 @@ def create_custom_profile(profile_path):
     # Parse Metadata
     metadata = parse_profile_metadata(profile_path, profile_content)
 
-    # Truncate the name if necessary
-    metadata['name'] = truncate_name(metadata['name'])
-
     # Profile Content
     files = {
             'file': (profile_name, open(profile_path, 'rb'), 'application/octet-stream')
@@ -651,9 +642,6 @@ def update_custom_profile(library_item_id, profile_path):
         profile_content = file.read()
 
     metadata = parse_profile_metadata(profile_path, profile_content)
-
-    # Truncate the name if necessary
-    metadata['name'] = truncate_name(metadata['name'])
 
     # Profile Content
     files = {
@@ -707,6 +695,12 @@ def sync_kandji_scripts(local_scripts, kandji_scripts, dryrun=False):
     grouped_scripts = {}
     for local_script in local_scripts:
         script_name = os.path.basename(local_script)
+
+        # Check if the script name is too long
+        if len(script_name) > 50:
+            logger.error(f"Script name '{script_name}' exceeds 50 characters. Skipping.")
+            continue  # Skip this script and proceed with others
+
         if script_name.startswith("audit_"):
             base_name = script_name[len("audit_"):]
             grouped_scripts.setdefault(base_name, {})['audit'] = local_script
@@ -739,6 +733,7 @@ def sync_kandji_scripts(local_scripts, kandji_scripts, dryrun=False):
             kandji_script = kandji_script_dict_by_id[library_item_id]
         elif configured_name in kandji_script_dict_by_name:
             kandji_script = kandji_script_dict_by_name[configured_name]
+
         if kandji_script:
             audit_changed = False
             remediation_changed = False
@@ -776,14 +771,20 @@ def sync_kandji_scripts(local_scripts, kandji_scripts, dryrun=False):
                 logger.info(f"Creating Kandji Custom Script Library Item: {configured_name}")
                 create_custom_script(audit_script, remediation_script)
 
+
 # Sync Kandji Profiles
 def sync_kandji_profiles(local_profiles, kandji_profiles, dryrun=False):
     # Create dictionaries to look up Kandji profiles by name and ID
-    kandji_profile_dict_by_name = {truncate_name(profile["name"]): profile for profile in kandji_profiles}
+    kandji_profile_dict_by_name = {profile["name"]: profile for profile in kandji_profiles}
     kandji_profile_dict_by_id = {profile["id"]: profile for profile in kandji_profiles}
 
     for local_profile in local_profiles:
         profile_name = os.path.basename(local_profile)
+
+        # Check if the profile name is too long
+        if len(profile_name) > 50:
+            logger.error(f"Profile name '{profile_name}' exceeds 50 characters. Skipping.")
+            continue  # Skip this profile and proceed with others
 
         # Read local profile content and parse metadata
         with open(local_profile, 'r') as f:
@@ -981,15 +982,6 @@ def download_profile(library_item_id, profile_dir):
     profile_file_path = os.path.join(profile_dir, slugified_name + ".mobileconfig")
     with open(profile_file_path, 'w') as f:
         f.write(profile_content)
-
-# Truncate Library Item Names if too long (Current limit is 50 characters)
-def truncate_name(name, max_length=50):
-    """Truncate the name to ensure it doesn't exceed the max length."""
-    if len(name) > max_length:
-        truncated_name = name[:max_length]
-        logger.warning(f"Name '{name}' is too long and has been truncated to '{truncated_name}'")
-        return truncated_name
-    return name
 
 # Main Logic
 def main():
