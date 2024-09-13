@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-SCRIPT_VERSION = "1.1.0"
+SCRIPT_VERSION = "1.2.0"
 
 import os
 import re
@@ -340,7 +340,8 @@ def parse_script_metadata(audit_script_path, audit_script_content):
         'self_service_category_id': None, # e.g. e6f6d5b4-0659-4b37-872c-5471115d453b
         'self_service_recommended': False,
         'active': True,
-        'restart': False
+        'restart': False,
+        'library_item_id': None # e.g. fbabb936-1bd2-4286-a4a2-4d9938e3e9b9
     }
 
     for line in audit_script_content.splitlines():
@@ -430,6 +431,9 @@ def update_custom_script(library_item_id, audit_script_path, remediation_script_
 
     # Parse metadata
     metadata = parse_script_metadata(audit_script_path, audit_script_content)
+
+    # Use the library_item_id from metadata if provided
+    library_item_id = metadata['library_item_id'] or library_item_id
 
     # Truncate the name if necessary
     metadata['name'] = truncate_name(metadata['name'])
@@ -524,7 +528,8 @@ def parse_profile_metadata(profile_path, profile_content):
         'runs_on_mac': False,
         'runs_on_iphone': False,
         'runs_on_ipad': False,
-        'runs_on_tv': False
+        'runs_on_tv': False,
+        'library_item_id': None
     }
 
     # Regex to match XML comments
@@ -694,7 +699,9 @@ def delete_custom_profile(library_item_id):
 
 # Sync Kandji Scripts
 def sync_kandji_scripts(local_scripts, kandji_scripts, dryrun=False):
-    kandji_script_dict = {script["name"]: script for script in kandji_scripts}
+    # Create dictionaries to look up Kandji scripts by name and ID
+    kandji_script_dict_by_name = {script["name"]: script for script in kandji_scripts}
+    kandji_script_dict_by_id = {script["id"]: script for script in kandji_scripts}
 
     # Group audit and remediation scripts
     grouped_scripts = {}
@@ -715,23 +722,24 @@ def sync_kandji_scripts(local_scripts, kandji_scripts, dryrun=False):
         audit_script = scripts.get('audit')
         remediation_script = scripts.get('remediation')
 
-        # Parse metadata from the audit script (or remediation if audit is missing)
+        # Parse metadata from the audit script
         metadata_script = audit_script
-
+        
         metadata = {}
         with open(metadata_script, 'r') as f:
             metadata = parse_script_metadata(metadata_script, f.read())
-        
-        # Use the configured name or fallback to base_name
+
+        # Use library_item_id if available, otherwise fallback to name-based matching
+        library_item_id = metadata.get('library_item_id')
         configured_name = metadata['name'] or base_name
 
-        # If there's a remediation script but no audit script, log a warning and skip the update
-        if remediation_script and not audit_script:
-            logger.warning(f"Remediation script '{remediation_script}' found without a matching audit script. No update will be made.")
-            continue
+        kandji_script = None
 
-        if configured_name in kandji_script_dict:
-            kandji_script = kandji_script_dict[configured_name]
+        if library_item_id and library_item_id in kandji_script_dict_by_id:
+            kandji_script = kandji_script_dict_by_id[library_item_id]
+        elif configured_name in kandji_script_dict_by_name:
+            kandji_script = kandji_script_dict_by_name[configured_name]
+        if kandji_script:
             audit_changed = False
             remediation_changed = False
 
@@ -770,7 +778,9 @@ def sync_kandji_scripts(local_scripts, kandji_scripts, dryrun=False):
 
 # Sync Kandji Profiles
 def sync_kandji_profiles(local_profiles, kandji_profiles, dryrun=False):
-    kandji_profile_dict = {profile["name"]: profile for profile in kandji_profiles}
+    # Create dictionaries to look up Kandji profiles by name and ID
+    kandji_profile_dict_by_name = {truncate_name(profile["name"]): profile for profile in kandji_profiles}
+    kandji_profile_dict_by_id = {profile["id"]: profile for profile in kandji_profiles}
 
     for local_profile in local_profiles:
         profile_name = os.path.basename(local_profile)
@@ -779,13 +789,20 @@ def sync_kandji_profiles(local_profiles, kandji_profiles, dryrun=False):
         with open(local_profile, 'r') as f:
             local_content = f.read()
             local_metadata = parse_profile_metadata(local_profile, local_content)
-        
-        # Use the configured name or fallback to base_name
+
+        # Use library_item_id if available, otherwise fallback to name-based matching
+        library_item_id = local_metadata.get('library_item_id')
         configured_name = local_metadata['name'] or profile_name
-        
-        if configured_name in kandji_profile_dict:
-            kandji_profile = kandji_profile_dict[configured_name]
-            kandji_content = kandji_profile.get('profile')            
+
+        kandji_profile = None
+
+        if library_item_id and library_item_id in kandji_profile_dict_by_id:
+            kandji_profile = kandji_profile_dict_by_id[library_item_id]
+        elif configured_name in kandji_profile_dict_by_name:
+            kandji_profile = kandji_profile_dict_by_name[configured_name]
+
+        if kandji_profile:
+            kandji_content = kandji_profile.get('profile')
 
             # Create kandji_metadata based on API response
             kandji_metadata = {
@@ -816,27 +833,59 @@ def sync_kandji_profiles(local_profiles, kandji_profiles, dryrun=False):
                 logger.info(f"Creating Kandji Custom Profile Library Item: {configured_name}")
                 create_custom_profile(local_profile)
 
+
 # Delete Kandji Items
 def delete_items(kandji_items, local_items, delete_func, dryrun=False):
-    # Create a set of local item names without prefixes
+    # Create dictionaries to look up Kandji items by name and ID
+    kandji_item_dict_by_name = {item["name"]: item for item in kandji_items}
+    kandji_item_dict_by_id = {item["id"]: item for item in kandji_items}
+
+    # Collect all local item names, metadata names, and IDs
     local_names = set()
+    local_ids = set()
+    local_metadata_names = set()
+
     for local_item in local_items:
         base_name = os.path.basename(local_item)
-        if base_name.startswith("audit_"):
-            local_names.add(base_name[len("audit_"):])
-        elif base_name.startswith("remediation_"):
-            local_names.add(base_name[len("remediation_"):])
-        else:
-            local_names.add(base_name)
+
+        # Read the metadata of the local item to check for library_item_id and name
+        with open(local_item, 'r') as f:
+            if local_item.endswith('.mobileconfig'):
+                local_metadata = parse_profile_metadata(local_item, f.read())
+            else:
+                local_metadata = parse_script_metadata(local_item, f.read())
+
+        library_item_id = local_metadata.get('library_item_id')
+        metadata_name = local_metadata.get('name')
+
+        # Collect the IDs, metadata names, and base names
+        if library_item_id:
+            local_ids.add(library_item_id)
+        if metadata_name:
+            local_metadata_names.add(metadata_name)
+        local_names.add(base_name)
 
     for item in kandji_items:
         item_name = item["name"]
-        if item_name not in local_names:
+        item_id = item["id"]
+
+        # Prioritize matching by library_item_id
+        if item_id in local_ids:
+            # The item exists locally by ID, so it should not be deleted
+            continue
+        elif item_name in local_metadata_names:
+            # The item exists locally by metadata name, so it should not be deleted
+            continue
+        elif item_name in local_names:
+            # The item exists locally by file name, so it should not be deleted
+            continue
+        else:
+            # The item does not exist locally and should be deleted
             if dryrun:
-                logger.info(f"[DRY RUN] Would delete Kandji item '{item_name}'")
+                logger.info(f"[DRY RUN] Would delete Kandji item '{item_name}' with ID '{item_id}'")
             else:
-                logger.info(f"Deleting Kandji item '{item_name}'")
-                delete_func(item["id"])
+                logger.info(f"Deleting Kandji item '{item_name}' with ID '{item_id}'")
+                delete_func(item_id)
 
 # Download Script
 def download_script(library_item_id, script_dir):
@@ -874,9 +923,9 @@ def download_script(library_item_id, script_dir):
             # Check for shebang and add metadata config below it if present
             if audit_content.startswith("#!"):
                 shebang, rest_of_content = audit_content.split('\n', 1)
-                f.write(f"{shebang}\n\n# git2kandji-config: name = {script_name}\n\n{rest_of_content}")
+                f.write(f"{shebang}\n\n# git2kandji-config: name = {script_name}\n# git2kandji-config: library_item_id = {library_item_id}\n\n{rest_of_content}")
             else:
-                f.write(f"# git2kandji-config: name = {script_name}\n\n{audit_content}")
+                f.write(f"# git2kandji-config: name = {script_name}\n# git2kandji-config: library_item_id = {library_item_id}\n\n{audit_content}")
 
     # Save remediation script if it exists (with slugified name)
     if remediation_content:
@@ -906,11 +955,27 @@ def download_profile(library_item_id, profile_dir):
 
     slugified_name = slugify(profile_name)
 
-    # Check if the profile name is already included as a comment
-    comment = f"<!-- git2kandji-config: name = {profile_name} -->"
-    if comment not in profile_content:
-        # Add the profile name as a comment at the beginning of the XML file after the XML declaration
-        profile_content = profile_content.replace("<?xml version=\"1.0\" encoding=\"UTF-8\"?>", f"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n{comment}")
+    # Construct the runs_on value based on the current settings
+    runs_on_values = []
+    if response.get('runs_on_mac'):
+        runs_on_values.append('mac')
+    if response.get('runs_on_iphone'):
+        runs_on_values.append('iphone')
+    if response.get('runs_on_ipad'):
+        runs_on_values.append('ipad')
+    if response.get('runs_on_tv'):
+        runs_on_values.append('tv')
+
+    runs_on = ', '.join(runs_on_values) if runs_on_values else 'none'
+
+    # Check if the profile name and library_item_id are already included as a comment
+    name_comment = f"<!-- git2kandji-config: name = {profile_name} -->"
+    id_comment = f"<!-- git2kandji-config: library_item_id = {library_item_id} -->"
+    runs_on_comment = f"<!-- git2kandji-config: runs_on = {runs_on} -->"
+    
+    if name_comment not in profile_content or id_comment not in profile_content or runs_on_comment not in profile_content:
+        # Add the profile name and library_item_id as comments at the beginning of the XML file after the XML declaration
+        profile_content = profile_content.replace("<?xml version=\"1.0\" encoding=\"UTF-8\"?>", f"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n{name_comment}\n{id_comment}\n{runs_on_comment}")
 
     # Save profile
     profile_file_path = os.path.join(profile_dir, slugified_name + ".mobileconfig")
