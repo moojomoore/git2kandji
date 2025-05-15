@@ -1,5 +1,8 @@
 # git2kandji
 
+# This repository has been archived. Please use [Kandji's kst tool](https://github.com/kandji-inc/kst)
+
+
 ## About
 This `python3` script leverages the [Kandji API](https://api-docs.kandji.io) to accomplish a couple of things:
 * Sync custom scripts from a repository (local or git) to Kandji
